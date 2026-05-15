@@ -18,6 +18,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/pflag"
@@ -116,6 +117,65 @@ func TestEndpointTargetPorts(t *testing.T) {
 
 			if diff := cmp.Diff(tt.expectedPorts, opts.EndpointTargetPorts); diff != "" {
 				t.Errorf("Resulting ports mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestGRPCGracefulShutdownTimeout(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		want        time.Duration
+		expectError bool
+	}{
+		{
+			name: "default waits indefinitely",
+			want: 0,
+		},
+		{
+			name: "valid duration",
+			args: []string{"--grpc-graceful-shutdown-timeout", "30s"},
+			want: 30 * time.Second,
+		},
+		{
+			name:        "negative duration",
+			args:        []string{"--grpc-graceful-shutdown-timeout=-1s"},
+			want:        -1 * time.Second,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := pflag.NewFlagSet(tt.name, pflag.ContinueOnError)
+			opts := NewOptions()
+			opts.AddFlags(fs)
+
+			argv := make([]string, 0, 4+len(tt.args))
+			argv = append(argv, "--endpoint-selector", "app=vllm", "--config-file", "fake-config.yaml", "--endpoint-target-ports", "8080")
+			argv = append(argv, tt.args...)
+
+			if err := fs.Parse(argv); err != nil {
+				t.Fatalf("Failed to parse flags: %v", err)
+			}
+			if err := opts.Complete(); err != nil {
+				t.Fatalf("Complete failed unexpectedly with error: %v", err)
+			}
+
+			err := opts.Validate()
+			if tt.expectError {
+				if err == nil {
+					t.Fatalf("Expected a validation error but got none.")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate failed unexpectedly with error: %v", err)
+			}
+
+			if opts.GRPCGracefulShutdownTimeout != tt.want {
+				t.Fatalf("GRPCGracefulShutdownTimeout = %v, want %v", opts.GRPCGracefulShutdownTimeout, tt.want)
 			}
 		})
 	}

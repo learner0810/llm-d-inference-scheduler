@@ -49,6 +49,7 @@ import (
 // ExtProcServerRunner provides methods to manage an external process server.
 type ExtProcServerRunner struct {
 	GrpcPort                         int
+	GrpcGracefulShutdownTimeout      time.Duration
 	GKNN                             common.GKNN
 	ControllerCfg                    ControllerConfig
 	Datastore                        datastore.Datastore
@@ -81,6 +82,7 @@ func NewDefaultExtProcServerRunner() *ExtProcServerRunner {
 	}
 	return &ExtProcServerRunner{
 		GrpcPort:                         opts.GRPCPort,
+		GrpcGracefulShutdownTimeout:      opts.GRPCGracefulShutdownTimeout,
 		GKNN:                             gknn,
 		ControllerCfg:                    ControllerConfig{true, true, true},
 		SecureServing:                    opts.SecureServing,
@@ -193,6 +195,6 @@ func (r *ExtProcServerRunner) AsRunnable(logger logr.Logger) manager.Runnable {
 		}
 
 		// Forward to the gRPC runnable.
-		return runnable.GRPCServer("ext-proc", srv, r.GrpcPort).Start(ctx)
+		return runnable.GRPCServerWithGracefulShutdownTimeout("ext-proc", srv, r.GrpcPort, r.GrpcGracefulShutdownTimeout).Start(ctx)
 	}))
 }

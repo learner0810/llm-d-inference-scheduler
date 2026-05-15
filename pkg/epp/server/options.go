@@ -55,6 +55,8 @@ type Options struct {
 	//
 	GRPCPort             int  // gRPC port used for communicating with Envoy proxy. (TODO: uint16?)
 	EnableLeaderElection bool // Enables leader election for high availability
+	// Timeout to wait for graceful gRPC shutdown before forcing the server to stop.
+	GRPCGracefulShutdownTimeout time.Duration
 	//
 	// InferencePool.
 	//
@@ -140,6 +142,9 @@ func (opts *Options) AddFlags(fs *pflag.FlagSet) {
 	opts.fs = fs
 
 	fs.IntVar(&opts.GRPCPort, "grpc-port", opts.GRPCPort, "gRPC port used for communicating with Envoy proxy.")
+	fs.DurationVar(&opts.GRPCGracefulShutdownTimeout, "grpc-graceful-shutdown-timeout", opts.GRPCGracefulShutdownTimeout,
+		"Timeout to wait for in-flight gRPC RPCs to finish during shutdown before forcing the server to stop. "+
+			"Set to 0 to wait indefinitely.")
 	fs.BoolVar(&opts.EnableLeaderElection, "ha-enable-leader-election", opts.EnableLeaderElection,
 		"Enables leader election for high availability. When enabled, readiness probes will only pass on the leader.")
 	fs.StringVar(&opts.PoolGroup, "pool-group", opts.PoolGroup,
@@ -231,6 +236,9 @@ func (opts *Options) Validate() error {
 				return fmt.Errorf("invalid port number %d in %q", port, "endpoint-target-ports")
 			}
 		}
+	}
+	if opts.GRPCGracefulShutdownTimeout < 0 {
+		return fmt.Errorf("flag %q must not be negative", "grpc-graceful-shutdown-timeout")
 	}
 
 	if opts.ConfigText != "" && opts.ConfigFile != "" {

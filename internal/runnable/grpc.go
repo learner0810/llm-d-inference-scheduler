@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"google.golang.org/grpc"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -29,6 +30,13 @@ import (
 // GRPCServer converts the given gRPC server into a runnable.
 // The server name is just being used for logging.
 func GRPCServer(name string, srv *grpc.Server, port int) manager.Runnable {
+	return GRPCServerWithGracefulShutdownTimeout(name, srv, port, 0)
+}
+
+// GRPCServerWithGracefulShutdownTimeout converts the given gRPC server into a runnable.
+// If gracefulShutdownTimeout is greater than zero, shutdown falls back to Stop after
+// the timeout expires.
+func GRPCServerWithGracefulShutdownTimeout(name string, srv *grpc.Server, port int, gracefulShutdownTimeout time.Duration) manager.Runnable {
 	return manager.RunnableFunc(func(ctx context.Context) error {
 		// Use "name" key as that is what manager.Server does as well.
 		log := ctrl.Log.WithValues("name", name)
@@ -42,16 +50,33 @@ func GRPCServer(name string, srv *grpc.Server, port int) manager.Runnable {
 
 		log.Info("gRPC server listening", "port", port)
 
-		// Shutdown on context closed.
-		// Terminate the server on context closed.
-		// Make sure the goroutine does not leak.
+		// Shutdown on context closed. Make sure the goroutine does not leak.
 		doneCh := make(chan struct{})
 		defer close(doneCh)
 		go func() {
 			select {
 			case <-ctx.Done():
 				log.Info("gRPC server shutting down")
-				srv.GracefulStop()
+				if gracefulShutdownTimeout <= 0 {
+					srv.GracefulStop()
+					return
+				}
+
+				gracefulStopCh := make(chan struct{})
+				go func() {
+					srv.GracefulStop()
+					close(gracefulStopCh)
+				}()
+
+				timer := time.NewTimer(gracefulShutdownTimeout)
+				defer timer.Stop()
+
+				select {
+				case <-gracefulStopCh:
+				case <-timer.C:
+					log.Info("gRPC graceful shutdown timeout exceeded, forcing stop", "timeout", gracefulShutdownTimeout)
+					srv.Stop()
+				}
 			case <-doneCh:
 			}
 		}()
