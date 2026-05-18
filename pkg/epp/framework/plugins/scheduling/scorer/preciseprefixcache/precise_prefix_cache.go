@@ -672,7 +672,7 @@ func (s *Scorer) ensureSubscriber(ctx context.Context, meta *fwkdl.EndpointMetad
 			"endpoint", endpointKey, "address", meta.Address)
 		return fmt.Errorf("ensure subscriber for %s: %w", endpointKey, err)
 	}
-	logger.V(logging.DEBUG).Info("Ensured KV-events subscriber", "endpoint", endpointKey, "zmq", zmqEndpoint)
+	logger.V(logging.DEBUG).Info("Ensured KV-events subscriber", "endpoint", endpointKey, "zmq", zmqEndpoint, "topic-filter", s.kvEventsConfig.TopicFilter)
 	return nil
 }
 

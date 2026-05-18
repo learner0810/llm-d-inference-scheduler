@@ -335,9 +335,9 @@ image-build: image-build-epp image-build-sidecar ## Build Container image using 
 image-build-%: check-container-tool ## Build Container image using $(CONTAINER_RUNTIME)
 	@printf "\033[33;1m==== Building Docker image $($*_IMAGE) ====\033[0m\n"
 	$(CONTAINER_RUNTIME) build \
-		--platform linux/$(TARGETARCH) \
+		--platform linux/amd64 \
 		--build-arg TARGETOS=linux \
-		--build-arg TARGETARCH=$(TARGETARCH) \
+		--build-arg TARGETARCH=amd64 \
 		--build-arg COMMIT_SHA=${GIT_COMMIT_SHA} \
 		--build-arg BUILD_REF=${BUILD_REF} \
 		--build-arg LDFLAGS="$(LDFLAGS)" \

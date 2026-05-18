@@ -37,6 +37,8 @@ require (
 	sigs.k8s.io/gateway-api-inference-extension v1.5.0
 )
 
+replace github.com/llm-d/llm-d-kv-cache v0.7.1 => github.com/learner0810/llm-d-kv-cache-manager v0.0.0-20260520040150-41acc1311371
+
 require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect

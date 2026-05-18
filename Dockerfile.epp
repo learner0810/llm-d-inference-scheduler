@@ -3,7 +3,7 @@
 # Default is distroless/static which includes CA certs and has minimal CVE surface.
 # NOTE: if using scratch, CA certificates must be copied from the builder stage:
 #   COPY --from=go-builder /etc/ssl/certs/ca-bundle.crt /etc/ssl/certs/ca-bundle.crt
-ARG BASE_IMAGE=gcr.io/distroless/static:nonroot
+ARG BASE_IMAGE=release-ci.daocloud.io/m.daocloud.io/docker.io/library/alpine:3.18
 
 # Go build stage
 FROM --platform=${BUILDPLATFORM} quay.io/projectquay/golang:1.25 AS go-builder
