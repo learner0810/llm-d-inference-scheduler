@@ -90,12 +90,28 @@ func (p *ctxObservingPlugin) Produce(ctx context.Context, _ *fwksched.InferenceR
 
 func (p *ctxObservingPlugin) Produces() map[fwkplugin.DataKey]any { return nil }
 
+type ctxIgnoringMutatingPlugin struct {
+	delay time.Duration
+}
+
+func (p *ctxIgnoringMutatingPlugin) TypedName() fwkplugin.TypedName {
+	return fwkplugin.TypedName{Type: "mock", Name: "ctx-ignoring"}
+}
+
+func (p *ctxIgnoringMutatingPlugin) Produce(_ context.Context, request *fwksched.InferenceRequest, _ []fwksched.Endpoint) error {
+	time.Sleep(p.delay)
+	request.FairnessID = "mutated-after-deadline"
+	return nil
+}
+
+func (p *ctxIgnoringMutatingPlugin) Produces() map[fwkplugin.DataKey]any { return nil }
+
 // TestDataProducerPluginsWithTimeout_CancelsPluginContext verifies that the
 // child context passed to plugins is cancelled with DeadlineExceeded when the
 // timeout fires. Without this cancellation, a slow plugin would continue
 // executing past the director's deadline and potentially commit state after
-// downstream hooks have already observed an "empty" state — the root cause of
-// the orphan-decrement drift we're fixing in the predicted-latency producer.
+// downstream hooks have already observed an "empty" state, causing
+// orphan-decrement drift in the predicted-latency producer.
 func TestDataProducerPluginsWithTimeout_CancelsPluginContext(t *testing.T) {
 	plugin := &ctxObservingPlugin{name: "slow", block: time.Second}
 	plugin.wg.Add(1)
@@ -115,6 +131,25 @@ func TestDataProducerPluginsWithTimeout_CancelsPluginContext(t *testing.T) {
 	plugin.wg.Wait()
 	assert.ErrorIs(t, plugin.observedCtxErr, context.DeadlineExceeded,
 		"plugin's context should be cancelled with DeadlineExceeded when timeout fires")
+}
+
+func TestDataProducerPluginsWithTimeout_WaitsForPluginReturnAfterTimeout(t *testing.T) {
+	request := &fwksched.InferenceRequest{}
+	plugin := &ctxIgnoringMutatingPlugin{delay: 30 * time.Millisecond}
+
+	start := time.Now()
+	err := dataProducerPluginsWithTimeout(
+		context.Background(),
+		10*time.Millisecond,
+		[]fwkrc.DataProducer{plugin},
+		request,
+		nil,
+	)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "DataProducer execution timed out")
+	assert.GreaterOrEqual(t, time.Since(start), plugin.delay)
+	assert.Equal(t, "mutated-after-deadline", request.FairnessID)
 }
 
 func TestDataProducerPluginsWithTimeout(t *testing.T) {

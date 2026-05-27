@@ -39,25 +39,20 @@ func executePluginsAsDAG(ctx context.Context, plugins []fwkrc.DataProducer, requ
 }
 
 // dataProducerPluginsWithTimeout executes DataProducer plugins with a timeout.
-// The child context is cancelled when the timeout fires so plugins can observe cancellation
-// (e.g. abort outbound HTTP calls) and avoid committing state after the director has moved on.
+// The timeout is cooperative: plugins receive a child context with a deadline,
+// and the director waits for them to return before moving on with shared
+// request-scoped objects.
 func dataProducerPluginsWithTimeout(ctx context.Context, timeout time.Duration, plugins []fwkrc.DataProducer,
 	request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- executePluginsAsDAG(ctx, plugins, request, endpoints)
-	}()
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("DataProducer execution timed out: %w", ctx.Err())
-		}
-		return ctx.Err()
+	err := executePluginsAsDAG(ctx, plugins, request, endpoints)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("DataProducer execution timed out: %w", ctx.Err())
 	}
+	if err != nil {
+		return err
+	}
+	return ctx.Err()
 }

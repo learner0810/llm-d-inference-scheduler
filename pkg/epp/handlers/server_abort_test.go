@@ -21,6 +21,7 @@ import (
 	"errors"
 	"testing"
 
+	configPb "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoyTypePb "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/go-logr/logr"
@@ -120,4 +121,60 @@ func TestUpdateStateAndSendIfNeeded_NotEvicted(t *testing.T) {
 	err := reqCtx.updateStateAndSendIfNeeded(srv, logger)
 	require.NoError(t, err)
 	assert.Empty(t, srv.sentResponses, "Should not send any response for normal state without queued responses")
+}
+
+func TestUpdateResponseHeaderState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		header        *configPb.HeaderValue
+		wantStreaming bool
+		wantStatus    string
+	}{
+		{
+			name: "content type falls back to value",
+			header: &configPb.HeaderValue{
+				Key:   "Content-Type",
+				Value: "text/event-stream; charset=utf-8",
+			},
+			wantStreaming: true,
+		},
+		{
+			name: "non-200 status falls back to value",
+			header: &configPb.HeaderValue{
+				Key:   "status",
+				Value: "503",
+			},
+			wantStatus: errcommon.ModelServerError,
+		},
+		{
+			name: "http2 pseudo status is recognized",
+			header: &configPb.HeaderValue{
+				Key:      ":status",
+				RawValue: []byte("502"),
+			},
+			wantStatus: errcommon.ModelServerError,
+		},
+		{
+			name: "raw value still works",
+			header: &configPb.HeaderValue{
+				Key:      "content-type",
+				RawValue: []byte("text/event-stream"),
+			},
+			wantStreaming: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			reqCtx := &RequestContext{}
+
+			reqCtx.updateResponseHeaderState(tt.header, logr.Discard())
+
+			assert.Equal(t, tt.wantStreaming, reqCtx.modelServerStreaming)
+			assert.Equal(t, tt.wantStatus, reqCtx.ResponseStatusCode)
+		})
+	}
 }

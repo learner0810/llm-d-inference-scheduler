@@ -385,14 +385,7 @@ func (s *StreamingServer) Process(srv extProcPb.ExternalProcessor_ProcessServer)
 			// This is currently unused.
 		case *extProcPb.ProcessingRequest_ResponseHeaders:
 			for _, header := range v.ResponseHeaders.Headers.GetHeaders() {
-				value := string(header.RawValue)
-				loggerTrace.Info("header", "key", header.Key, "value", value)
-				if header.Key == "status" && value != "200" {
-					reqCtx.ResponseStatusCode = errcommon.ModelServerError
-				} else if header.Key == "content-type" && strings.Contains(value, "text/event-stream") {
-					reqCtx.modelServerStreaming = true
-					loggerTrace.Info("model server is streaming response")
-				}
+				reqCtx.updateResponseHeaderState(header, loggerTrace)
 			}
 			reqCtx.RequestState = ResponseReceived
 			reqCtx = s.HandleResponseHeaders(ctx, reqCtx, v)
@@ -457,6 +450,23 @@ func (s *StreamingServer) Process(srv extProcPb.ExternalProcessor_ProcessServer)
 			// This ensures Envoy continues with the request without calling further phases.
 			// See: https://github.com/envoyproxy/envoy/blob/0533de0acca281110945e5726bbb306fbb12bde5/api/envoy/service/ext_proc/v3/external_processor.proto#L40-L41
 			return nil
+		}
+	}
+}
+
+func (reqCtx *RequestContext) updateResponseHeaderState(header *configPb.HeaderValue, logger logr.Logger) {
+	value := envoy.GetHeaderValue(header)
+	logger.Info("header", "key", header.Key, "value", value)
+
+	switch strings.ToLower(header.Key) {
+	case "status", ":status":
+		if value != "200" {
+			reqCtx.ResponseStatusCode = errcommon.ModelServerError
+		}
+	case "content-type":
+		if strings.Contains(strings.ToLower(value), "text/event-stream") {
+			reqCtx.modelServerStreaming = true
+			logger.Info("model server is streaming response")
 		}
 	}
 }
