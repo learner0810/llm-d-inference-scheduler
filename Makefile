@@ -138,7 +138,7 @@ LDFLAGS ?= -s -w
 # Optional: override the runtime base image used in container builds.
 # When set, passed as --build-arg BASE_IMAGE=<value> to the container build.
 # Example: BASE_IMAGE=registry.access.redhat.com/ubi9/ubi-micro:9.7 make image-build-epp
-BASE_IMAGE ?=
+BASE_IMAGE ?= release-ci.daocloud.io/m.daocloud.io/docker.io/library/alpine:3.18
 
 # test packages
 epp_TEST_PACKAGES = $$(go list ./... | grep -v /test/ | grep -v ./pkg/sidecar/ | tr '\n' ' ')
@@ -335,9 +335,9 @@ image-build: image-build-epp image-build-sidecar ## Build Container image using 
 image-build-%: check-container-tool ## Build Container image using $(CONTAINER_RUNTIME)
 	@printf "\033[33;1m==== Building Docker image $($*_IMAGE) ====\033[0m\n"
 	$(CONTAINER_RUNTIME) build \
-		--platform linux/$(TARGETARCH) \
+		--platform linux/amd64 \
 		--build-arg TARGETOS=linux \
-		--build-arg TARGETARCH=$(TARGETARCH) \
+		--build-arg TARGETARCH=amd64 \
 		--build-arg COMMIT_SHA=${GIT_COMMIT_SHA} \
 		--build-arg BUILD_REF=${BUILD_REF} \
 		--build-arg LDFLAGS="$(LDFLAGS)" \
