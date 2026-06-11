@@ -22,7 +22,7 @@ const (
 
 // compile-time type assertion
 var _ scheduling.Scorer = &SessionAffinity{}
-var _ requestcontrol.ResponseBody = &SessionAffinity{}
+var _ requestcontrol.ResponseHeader = &SessionAffinity{}
 
 // Factory defines the factory function for SessionAffinity scorer.
 func Factory(name string, _ json.RawMessage, _ plugin.Handle) (plugin.Plugin, error) {
@@ -88,10 +88,7 @@ func (s *SessionAffinity) Score(ctx context.Context, _ *scheduling.CycleState, r
 // TODO: this should be using a cookie and ensure not overriding any other
 // cookie values if present.
 // Tracked in https://github.com/llm-d/llm-d-inference-scheduler/issues/28
-func (s *SessionAffinity) ResponseBody(ctx context.Context, _ *scheduling.LLMRequest, response *requestcontrol.Response, targetPod *datalayer.EndpointMetadata) {
-	if !response.EndOfStream {
-		return
-	}
+func (s *SessionAffinity) ResponseHeader(ctx context.Context, _ *scheduling.LLMRequest, response *requestcontrol.Response, targetPod *datalayer.EndpointMetadata) {
 	if response == nil || targetPod == nil {
 		reqID := "undefined"
 		if response != nil {
@@ -105,5 +102,6 @@ func (s *SessionAffinity) ResponseBody(ctx context.Context, _ *scheduling.LLMReq
 		response.Headers = make(map[string]string)
 	}
 
+	log.FromContext(ctx).V(logutil.DEBUG).Info("Session affinity scorer - ResponseHeader set header", "req id", response.RequestId, "pod", targetPod.NamespacedName.String())
 	response.Headers[sessionTokenHeader] = base64.StdEncoding.EncodeToString([]byte(targetPod.NamespacedName.String()))
 }
