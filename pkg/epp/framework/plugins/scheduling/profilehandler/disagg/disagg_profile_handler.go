@@ -9,6 +9,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
@@ -323,12 +324,21 @@ func (h *Handler) ProcessResults(
 		return nil, errors.New("request is nil")
 	}
 
+	updatedResults := map[string]*scheduling.ProfileRunResult{}
+
 	decodeRunResults := profileResults[h.decodeProfile]
 	if decodeRunResults == nil || len(decodeRunResults.TargetEndpoints) == 0 {
-		return nil, errors.New("failed to find available decode workers")
+		if prefillRes, ok := profileResults[h.prefillProfile]; ok && prefillRes != nil {
+			klog.V(2).Infof("failback to prefillRes: %v", prefillRes)
+			updatedResults[h.decodeProfile] = prefillRes
+		} else {
+			return nil, errors.New("failed to find available decode workers")
+		}
+		return &scheduling.SchedulingResult{
+			PrimaryProfileName: h.decodeProfile,
+			ProfileResults:     updatedResults,
+		}, nil
 	}
-
-	updatedResults := map[string]*scheduling.ProfileRunResult{}
 
 	updatedResults[h.decodeProfile] = decodeRunResults
 
