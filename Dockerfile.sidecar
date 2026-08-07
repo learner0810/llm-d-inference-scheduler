@@ -12,6 +12,7 @@ ARG TARGETARCH
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
+ENV GOPROXY=https://goproxy.cn
 COPY go.mod go.mod
 COPY go.sum go.sum
 # Download dependencies - this layer is cached as long as go.mod/go.sum are unchanged
