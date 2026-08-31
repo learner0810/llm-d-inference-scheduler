@@ -134,6 +134,106 @@ var _ = Describe("P2P Connector", func() {
 		testInfo.cancelFn()
 		<-testInfo.stoppedCh
 	})
+
+	It("should cap Responses API output on the prefill leg", func() {
+		proxyBaseAddr := testInfo.startProxy()
+
+		body := `{
+			"model": "Qwen/Qwen2-0.5B",
+			"input": "Hello",
+			"max_output_tokens": 100
+		}`
+		req, err := http.NewRequest(http.MethodPost, proxyBaseAddr+ResponsesPath, bytes.NewReader([]byte(body)))
+		Expect(err).ToNot(HaveOccurred())
+		req.Header.Add(routing.PrefillEndpointHeader, testInfo.prefillBackend.URL[len("http://"):])
+
+		resp, err := http.DefaultClient.Do(req)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+		Eventually(func() int {
+			return len(testInfo.prefillHandler.GetCompletionRequests())
+		}).Should(Equal(1))
+
+		prefillReq := testInfo.prefillHandler.GetCompletionRequests()[0]
+		Expect(prefillReq).To(HaveKeyWithValue(requestFieldMaxOutputTokens, BeNumerically("==", 1)))
+		Expect(prefillReq).ToNot(HaveKey(requestFieldMaxTokens))
+
+		decodeReq := testInfo.decodeHandler.GetCompletionRequests()[0]
+		Expect(decodeReq).To(HaveKeyWithValue(requestFieldMaxOutputTokens, BeNumerically("==", 100)))
+
+		testInfo.cancelFn()
+		<-testInfo.stoppedCh
+	})
+
+	It("should cap Generate API sampling parameters on the prefill leg", func() {
+		proxyBaseAddr := testInfo.startProxy()
+
+		body := `{
+			"model": "Qwen/Qwen2-0.5B",
+			"token_ids": [1, 2, 3, 4],
+			"sampling_params": {"max_tokens": 100, "min_tokens": 5}
+		}`
+		req, err := http.NewRequest(http.MethodPost, proxyBaseAddr+GeneratePath, bytes.NewReader([]byte(body)))
+		Expect(err).ToNot(HaveOccurred())
+		req.Header.Add(routing.PrefillEndpointHeader, testInfo.prefillBackend.URL[len("http://"):])
+
+		resp, err := http.DefaultClient.Do(req)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+		Eventually(func() int {
+			return len(testInfo.prefillHandler.GetCompletionRequests())
+		}).Should(Equal(1))
+
+		prefillReq := testInfo.prefillHandler.GetCompletionRequests()[0]
+		prefillSamplingParams, ok := prefillReq[requestFieldSamplingParams].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(prefillSamplingParams).To(HaveKeyWithValue(requestFieldMaxTokens, BeNumerically("==", 1)))
+		Expect(prefillSamplingParams).To(HaveKeyWithValue(requestFieldMinTokens, BeNumerically("==", 1)))
+		Expect(prefillReq).ToNot(HaveKey(requestFieldMaxTokens))
+
+		decodeReq := testInfo.decodeHandler.GetCompletionRequests()[0]
+		decodeSamplingParams, ok := decodeReq[requestFieldSamplingParams].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(decodeSamplingParams).To(HaveKeyWithValue(requestFieldMaxTokens, BeNumerically("==", 100)))
+		Expect(decodeSamplingParams).To(HaveKeyWithValue(requestFieldMinTokens, BeNumerically("==", 5)))
+
+		testInfo.cancelFn()
+		<-testInfo.stoppedCh
+	})
+
+	It("should cap min_tokens on the chat prefill leg", func() {
+		proxyBaseAddr := testInfo.startProxy()
+
+		body := `{
+			"model": "Qwen/Qwen2-0.5B",
+			"messages": [{"role": "user", "content": "Hello"}],
+			"max_tokens": 50,
+			"min_tokens": 5
+		}`
+		req, err := http.NewRequest(http.MethodPost, proxyBaseAddr+ChatCompletionsPath, bytes.NewReader([]byte(body)))
+		Expect(err).ToNot(HaveOccurred())
+		req.Header.Add(routing.PrefillEndpointHeader, testInfo.prefillBackend.URL[len("http://"):])
+
+		resp, err := http.DefaultClient.Do(req)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+		Eventually(func() int {
+			return len(testInfo.prefillHandler.GetCompletionRequests())
+		}).Should(Equal(1))
+
+		prefillReq := testInfo.prefillHandler.GetCompletionRequests()[0]
+		Expect(prefillReq).To(HaveKeyWithValue(requestFieldMaxTokens, BeNumerically("==", 1)))
+		Expect(prefillReq).To(HaveKeyWithValue(requestFieldMinTokens, BeNumerically("==", 1)))
+
+		decodeReq := testInfo.decodeHandler.GetCompletionRequests()[0]
+		Expect(decodeReq).To(HaveKeyWithValue(requestFieldMinTokens, BeNumerically("==", 5)))
+
+		testInfo.cancelFn()
+		<-testInfo.stoppedCh
+	})
 })
 
 var _ = DescribeTable("p2pPullAvailable",

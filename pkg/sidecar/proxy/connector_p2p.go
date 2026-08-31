@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -35,7 +36,6 @@ import (
 
 	"github.com/llm-d/llm-d-router/pkg/common/observability/logging"
 	"github.com/llm-d/llm-d-router/pkg/common/observability/tracing"
-	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 )
 
 // handleP2P implements the vLLM OffloadingConnector P2P orchestration contract. The
@@ -43,7 +43,7 @@ import (
 // pulls it using the prefiller's OffloadingConnector P2P tier host/port. Both legs are
 // dispatched concurrently: the connector parks any KV blocks stored before the
 // decoder's fetch binds the session, so ordering between the legs is safe.
-func (s *Server) handleP2P(w http.ResponseWriter, r *http.Request, prefillPodHostPort, kvCacheSource string) {
+func (s *Server) handleP2P(w http.ResponseWriter, r *http.Request, prefillPodHostPort, kvCacheSource string, apiType APIType) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		if err := errorJSONInvalid(fmt.Errorf("failed to read request body: %w", err), w); err != nil {
@@ -80,7 +80,7 @@ func (s *Server) handleP2P(w http.ResponseWriter, r *http.Request, prefillPodHos
 	}
 	s.addP2PPullToPrefill(prefillKVParams, kvCacheSource, prefillPodHostPort)
 	prefillData[requestFieldKVTransferParams] = prefillKVParams
-	reqcommon.PrimeSingleTokenRequest(prefillData, requestData)
+	primeP2PSingleTokenRequest(prefillData, apiType)
 
 	prefillBody, err := json.Marshal(prefillData)
 	if err != nil {
@@ -119,6 +119,26 @@ func (s *Server) handleP2P(w http.ResponseWriter, r *http.Request, prefillPodHos
 	}
 
 	s.handleP2PConcurrentRequests(w, r, prefillBody, decodeBody, prefillPodHostPort)
+}
+
+// primeP2PSingleTokenRequest caps the output fields understood by the request's
+// API while preserving optional fields that the client omitted.
+func primeP2PSingleTokenRequest(requestData map[string]any, apiType APIType) {
+	if apiType == APITypeGenerate {
+		if samplingParams, ok := requestData[requestFieldSamplingParams].(map[string]any); ok {
+			requestData[requestFieldSamplingParams] = maps.Clone(samplingParams)
+		}
+	}
+
+	tokenMap, _ := tokenLimitMap(requestData, apiType)
+	for i, field := range tokenLimitFieldsForAPIType(apiType) {
+		if _, present := tokenMap[field]; i == 0 || present {
+			tokenMap[field] = 1
+		}
+	}
+
+	requestData[requestFieldStream] = false
+	delete(requestData, requestFieldStreamOptions)
 }
 
 func (s *Server) handleP2PConcurrentRequests(w http.ResponseWriter, r *http.Request, prefillBody, decodeBody []byte, prefillHost string) {

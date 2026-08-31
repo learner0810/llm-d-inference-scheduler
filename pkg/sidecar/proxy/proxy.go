@@ -581,8 +581,8 @@ func (s *Server) setKVConnector() {
 			s.handleMooncake(w, r, host)
 		}
 	case KVConnectorOffloading:
-		s.handlePDConnector = func(w http.ResponseWriter, r *http.Request, host string, kvCacheSource string, _ APIType) {
-			s.handleP2P(w, r, host, kvCacheSource)
+		s.handlePDConnector = func(w http.ResponseWriter, r *http.Request, host string, kvCacheSource string, apiType APIType) {
+			s.handleP2P(w, r, host, kvCacheSource, apiType)
 		}
 	case KVConnectorNIXLV2:
 		fallthrough
