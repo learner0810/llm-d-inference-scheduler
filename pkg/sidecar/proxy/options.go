@@ -76,6 +76,7 @@ const (
 	prefillMaxRetries         = "prefill-max-retries"
 	prefillRetryBackoff       = "prefill-retry-backoff"
 	decodeChunkSize           = "decode-chunk-size"
+	p2pDecodeWaitTimeout      = "p2p-decode-wait-timeout"
 	inlineConfiguration       = "configuration"
 	configurationFile         = "configuration-file"
 	tracingFlag               = "tracing"
@@ -93,6 +94,7 @@ const (
 	defaultDataParallelSize      = 1
 	defaultMooncakeBootstrapPort = 8998
 	defaultP2PConnectorPort      = 7777
+	defaultP2PDecodeWaitTimeout  = 30 * time.Second
 
 	// defaultMoRIIOParallelDecodeWaitTimeout backstops the parallel WRITE
 	// dispatch: it bounds how long the decode leg waits on the prefill outcome
@@ -114,6 +116,7 @@ type yamlConfiguration struct {
 	VLLMPort                int      `json:"vllm-port,omitempty"`
 	MooncakeBootstrapPort   int      `json:"mooncake-bootstrap-port,omitempty"`
 	P2PConnectorPort        int      `json:"p2p-connector-port,omitempty"`
+	P2PDecodeWaitTimeout    string   `json:"p2p-decode-wait-timeout,omitempty"`
 	DataParallelSize        int      `json:"data-parallel-size,omitempty"`
 	KVConnector             string   `json:"kv-connector,omitempty"`
 	ECConnector             string   `json:"ec-connector,omitempty"`
@@ -222,6 +225,7 @@ func NewOptions() *Options {
 			PrefillRetryBackoff:     200 * time.Millisecond,
 			MooncakeBootstrapPort:   mooncakeBootstrapPort,
 			P2PConnectorPort:        p2pConnectorPort,
+			P2PDecodeWaitTimeout:    defaultP2PDecodeWaitTimeout,
 			PoolGroup:               routing.InferencePoolAPIGroup,
 			DecodeChunkSize:         0,
 			Tracing:                 false,
@@ -273,6 +277,8 @@ func (opts *Options) AddFlags(fs *pflag.FlagSet) {
 		"the port used to query the Mooncake bootstrap endpoint on prefill pods (only used with --kv-connector=mooncake)")
 	fs.IntVar(&opts.P2PConnectorPort, p2pConnectorPortFlag, opts.P2PConnectorPort,
 		"the prefiller's OffloadingConnector P2P tier listening port, injected as remote_port on the decode leg; with --data-parallel-size > 1 this is the rank-0 port and rank r uses port+r (used with --kv-connector=offloading or --enable-p2p-pull)")
+	fs.DurationVar(&opts.P2PDecodeWaitTimeout, p2pDecodeWaitTimeout, opts.P2PDecodeWaitTimeout,
+		"maximum time concurrent offloading dispatch waits for prefill before cancelling prefill and decode")
 	fs.BoolVar(&opts.EnableP2PPull, enableP2PPull, opts.EnableP2PPull,
 		"declare the OffloadingConnector P2P tier available for cached-prefix pulls when the PD connector is NIXL, i.e. engines run MultiConnector(NixlConnector + OffloadingConnector). Rejected with any other --kv-connector; offloading provides the tier natively without this flag.")
 	fs.BoolVar(&opts.SecureServing, secureServing, opts.SecureServing, "Enables secure proxy. Defaults to true.")
@@ -656,6 +662,9 @@ func (opts *Options) Validate() error {
 		return fmt.Errorf("--p2p-connector-port %d plus data-parallel rank %d exceeds 65535",
 			opts.P2PConnectorPort, opts.DataParallelSize-1)
 	}
+	if opts.P2PDecodeWaitTimeout <= 0 {
+		return fmt.Errorf("--%s must be positive, got %v", p2pDecodeWaitTimeout, opts.P2PDecodeWaitTimeout)
+	}
 
 	// --enable-p2p-pull composes the OffloadingConnector P2P tier alongside NIXL
 	// via MultiConnector; it is only meaningful with the NIXLv2 PD connector.
@@ -757,6 +766,15 @@ func (opts *Options) mergeYAMLConfiguration(cfg yamlConfiguration) {
 	}
 	if cfg.P2PConnectorPort != 0 && !opts.isFlagSet(p2pConnectorPortFlag) {
 		opts.P2PConnectorPort = cfg.P2PConnectorPort
+	}
+	if cfg.P2PDecodeWaitTimeout != "" && !opts.isFlagSet(p2pDecodeWaitTimeout) {
+		d, err := time.ParseDuration(cfg.P2PDecodeWaitTimeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: ignoring invalid %s value %q: %v; using default %v\n",
+				p2pDecodeWaitTimeout, cfg.P2PDecodeWaitTimeout, err, opts.P2PDecodeWaitTimeout)
+		} else {
+			opts.P2PDecodeWaitTimeout = d
+		}
 	}
 	if cfg.DataParallelSize != 0 && !opts.isFlagSet(dataParallelSize) {
 		opts.DataParallelSize = cfg.DataParallelSize

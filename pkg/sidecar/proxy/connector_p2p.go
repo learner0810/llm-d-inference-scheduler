@@ -123,15 +123,11 @@ func (s *Server) handleP2P(w http.ResponseWriter, r *http.Request, prefillPodHos
 
 func (s *Server) handleP2PConcurrentRequests(w http.ResponseWriter, r *http.Request, prefillBody, decodeBody []byte, prefillHost string) {
 	tracer := tracing.Tracer(tracerScope)
-	ctx := r.Context()
+	parentCtx := r.Context()
+	dispatchCtx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
 
-	// WithoutCancel for prefill so it isn't aborted when the decode response finishes first.
-	prefillReq := cloneRequestWithBody(context.WithoutCancel(ctx), r, prefillBody)
-	decodeReq := cloneRequestWithBody(ctx, r, decodeBody)
-
-	// Prefill runs in a goroutine: only stores KV, response is discarded.
-	// Decode runs on the main thread: writes the actual response back via w.
-	ctx, prefillSpan := tracer.Start(ctx, "prefill",
+	prefillCtx, prefillSpan := tracer.Start(dispatchCtx, "prefill",
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
 	prefillSpan.SetAttributes(
@@ -151,7 +147,21 @@ func (s *Server) handleP2PConcurrentRequests(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	prefillReq := cloneRequestWithBody(prefillCtx, r, prefillBody)
+	decodeCtx, decodeSpan := tracer.Start(dispatchCtx, "decode",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer decodeSpan.End()
+	decodeSpan.SetAttributes(
+		attribute.String("llm_d.pd_proxy.connector", KVConnectorOffloading),
+		attribute.Bool("llm_d.pd_proxy.decode.concurrent_with_prefill", true),
+	)
+	decodeReq := cloneRequestWithBody(decodeCtx, r, decodeBody)
+
+	var prefillResp *bufferedResponseWriter
+	prefillDone := make(chan struct{})
 	go func() {
+		defer close(prefillDone)
 		defer prefillSpan.End()
 		defer func() {
 			if rec := recover(); rec != nil && rec != http.ErrAbortHandler {
@@ -160,6 +170,7 @@ func (s *Server) handleP2PConcurrentRequests(w http.ResponseWriter, r *http.Requ
 		}()
 		pw := &bufferedResponseWriter{}
 		prefillHandler.ServeHTTP(pw, prefillReq)
+		prefillResp = pw
 		prefillDuration := time.Since(prefillStart)
 		prefillSpan.SetAttributes(
 			attribute.Int("llm_d.pd_proxy.prefill.status_code", pw.statusCode),
@@ -167,37 +178,78 @@ func (s *Server) handleP2PConcurrentRequests(w http.ResponseWriter, r *http.Requ
 		)
 		if isHTTPError(pw.statusCode) {
 			prefillSpan.SetStatus(codes.Error, "prefill request failed")
+			cancel()
 		}
 		s.logger.V(logging.DEBUG).Info("p2p prefill request completed", "status", pw.statusCode)
 	}()
 
-	// Decode Stage
-	ctx, decodeSpan := tracer.Start(ctx, "decode",
-		trace.WithSpanKind(trace.SpanKindInternal),
-	)
-	defer decodeSpan.End()
-
-	decodeSpan.SetAttributes(
-		attribute.String("llm_d.pd_proxy.connector", KVConnectorOffloading),
-		attribute.Bool("llm_d.pd_proxy.decode.concurrent_with_prefill", true),
-	)
+	decodeWriter := newDeferredCommitWriter(w)
+	decodeDone := make(chan struct{})
 	decodeStart := time.Now()
+	go func() {
+		defer close(decodeDone)
+		s.decoderProxy.ServeHTTP(decodeWriter, decodeReq)
+		decodeSpan.SetAttributes(
+			attribute.Float64("llm_d.pd_proxy.decode.duration_ms", float64(time.Since(decodeStart).Milliseconds())),
+			attribute.String("llm_d.pd_proxy.decode.target", s.config.DecoderURL.Host),
+		)
+	}()
 
-	decodeReq = decodeReq.WithContext(ctx)
-	s.decoderProxy.ServeHTTP(w, decodeReq)
+	waitTimeout := s.config.P2PDecodeWaitTimeout
+	if waitTimeout <= 0 {
+		waitTimeout = defaultP2PDecodeWaitTimeout
+	}
+	timer := time.NewTimer(waitTimeout)
+	defer timer.Stop()
 
+	select {
+	case <-prefillDone:
+		if prefillResp != nil && !isHTTPError(prefillResp.statusCode) {
+			decodeWriter.commit()
+			break
+		}
+
+		cancel()
+		decodeWriter.abort()
+		status := http.StatusBadGateway
+		if prefillResp != nil {
+			if prefillResp.statusCode >= 100 {
+				status = prefillResp.statusCode
+			}
+			for key, values := range prefillResp.Header() {
+				for _, value := range values {
+					w.Header().Add(key, value)
+				}
+			}
+		}
+		s.logger.Info("p2p prefill failed; aborting decode", "status", status)
+		w.WriteHeader(status)
+		if prefillResp != nil {
+			if _, err := w.Write(prefillResp.bodyBytes()); err != nil {
+				s.logger.Error(err, "failed to send p2p prefill error to client")
+			}
+		}
+	case <-timer.C:
+		cancel()
+		decodeWriter.abort()
+		s.logger.Error(nil, "p2p prefill did not complete before decode wait timeout",
+			"timeout", waitTimeout.String())
+		w.WriteHeader(http.StatusGatewayTimeout)
+		if _, err := w.Write([]byte(`{"error":"decode aborted: prefill did not complete before the P2P decode wait timeout"}`)); err != nil {
+			s.logger.Error(err, "failed to send p2p timeout error to client")
+		}
+		<-prefillDone
+	}
+
+	<-decodeDone
 	decodeDuration := time.Since(decodeStart)
-	decodeSpan.SetAttributes(
-		attribute.Float64("llm_d.pd_proxy.decode.duration_ms", float64(decodeDuration.Milliseconds())),
-		attribute.String("llm_d.pd_proxy.decode.target", s.config.DecoderURL.Host),
-	)
 
 	// End-to-end P/D timing. True TTFT captures time from gateway request start
 	// to decode start; prefill duration is tracked in the async prefill span.
-	if currentSpan := trace.SpanFromContext(ctx); currentSpan.SpanContext().IsValid() {
+	if currentSpan := trace.SpanFromContext(decodeCtx); currentSpan.SpanContext().IsValid() {
 		var totalDuration time.Duration
 		var trueTTFT time.Duration
-		if requestStartValue := ctx.Value(requestStartTimeKey); requestStartValue != nil {
+		if requestStartValue := decodeCtx.Value(requestStartTimeKey); requestStartValue != nil {
 			if requestStart, ok := requestStartValue.(time.Time); ok {
 				totalDuration = time.Since(requestStart)
 				trueTTFT = decodeStart.Sub(requestStart)

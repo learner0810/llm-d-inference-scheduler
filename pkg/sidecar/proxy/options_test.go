@@ -464,6 +464,7 @@ func compareOptions(t *testing.T, expected, actual *Options) {
 	assertEqual(enableSSRFProtection, expected.EnableSSRFProtection, actual.EnableSSRFProtection)
 	assertEqual(enablePrefillerSampling, expected.EnablePrefillerSampling, actual.EnablePrefillerSampling)
 	assertEqual(enableP2PPull, expected.EnableP2PPull, actual.EnableP2PPull)
+	assertEqual(p2pDecodeWaitTimeout, expected.P2PDecodeWaitTimeout, actual.P2PDecodeWaitTimeout)
 
 	assertEqual("UseTLSForPrefiller", expected.UseTLSForPrefiller, actual.UseTLSForPrefiller)
 	assertEqual("UseTLSForDecoder", expected.UseTLSForDecoder, actual.UseTLSForDecoder)
@@ -623,6 +624,22 @@ func TestP2PConnectorPort(t *testing.T) {
 		opts.P2PConnectorPort = 70000
 		require.NoError(t, opts.Complete())
 		require.ErrorContains(t, opts.Validate(), "--p2p-connector-port must be between 1 and 65535")
+	})
+}
+
+func TestP2PDecodeWaitTimeout(t *testing.T) {
+	t.Run("defaults to 30 seconds", func(t *testing.T) {
+		opts := NewOptions()
+		require.NoError(t, opts.Complete())
+		require.NoError(t, opts.Validate())
+		require.Equal(t, defaultP2PDecodeWaitTimeout, opts.P2PDecodeWaitTimeout)
+	})
+
+	t.Run("rejects a non-positive timeout", func(t *testing.T) {
+		opts := NewOptions()
+		opts.P2PDecodeWaitTimeout = 0
+		require.NoError(t, opts.Complete())
+		require.ErrorContains(t, opts.Validate(), "--p2p-decode-wait-timeout must be positive")
 	})
 }
 

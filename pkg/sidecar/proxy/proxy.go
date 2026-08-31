@@ -223,6 +223,9 @@ type Config struct {
 	// P2PConnectorPort+r and the injected port is offset by the target's rank.
 	// Meaningful with --kv-connector=offloading or --enable-p2p-pull.
 	P2PConnectorPort int
+	// P2PDecodeWaitTimeout bounds how long concurrent offloading dispatch waits
+	// for the prefill outcome before cancelling both upstream requests.
+	P2PDecodeWaitTimeout time.Duration
 
 	// EnableP2PPull declares that the OffloadingConnector P2P tier is available
 	// for cached-prefix pulls even when the PD connector is not offloading, i.e.
